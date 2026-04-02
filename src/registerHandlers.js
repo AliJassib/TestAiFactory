@@ -26,6 +26,7 @@ export function registerHandlers() {
       );
       return;
     }
+    
 
     if (cmd0 === '/clear') {
       await handleClearCommand(msg);
