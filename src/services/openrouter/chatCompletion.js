@@ -39,6 +39,7 @@ export async function completeChat({ model, userId, messages, signal }) {
   }
 
   let fullText = data.choices?.[0]?.message?.content;
+  console.log(data.choices?.[0]?.message);
   if (typeof fullText !== 'string') fullText = '';
   const finishReason = data.choices?.[0]?.finish_reason;
 
