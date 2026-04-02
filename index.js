@@ -1,6 +1,9 @@
 import TelegramBot from 'node-telegram-bot-api';
 import axios from 'axios';
 
+/** OpenRouter model: default picks any available free model (see https://openrouter.ai/docs/guides/routing/routers/free-router). */
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
+
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 bot.on('message', async (msg) => {
@@ -15,7 +18,7 @@ bot.on('message', async (msg) => {
     const res = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
-        model: 'mistralai/mistral-7b-instruct:free',
+        model: OPENROUTER_MODEL,
         messages: [{ role: 'user', content: text }]
       },
       {
