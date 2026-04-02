@@ -5,6 +5,7 @@ import { handleModelsCommand } from './commands/models/handleCommand.js';
 import { handleModelsCallbackQuery } from './commands/models/handleCallback.js';
 import { handleMyModelCommand } from './commands/mymodel/handleCommand.js';
 import { handleClearCommand } from './commands/clear/handleCommand.js';
+import { handleCreditsCommand } from './commands/credits/handleCommand.js';
 import { handleChatMessage } from './commands/chat/handleMessage.js';
 import { clearUserModel } from './state/userModel.js';
 
@@ -22,11 +23,11 @@ export function registerHandlers() {
       clearUserModel(userId);
       await bot.sendMessage(
         msg.chat.id,
-        `مرحبا بك. تم ضبط الموديل على الافتراضي: ${OPENROUTER_MODEL}\nالأوامر: /models، /mymodel، /clear، ثم اكتب رسالتك للمحادثة.`
+        `مرحبا بك. تم ضبط الموديل على الافتراضي: ${OPENROUTER_MODEL}\nالأوامر: /models، /mymodel، /credits، /clear، ثم اكتب رسالتك للمحادثة.`
       );
       return;
     }
-    
+
 
     if (cmd0 === '/clear') {
       await handleClearCommand(msg);
@@ -39,6 +40,11 @@ export function registerHandlers() {
     }
     if (cmd0 === '/mymodel') {
       await handleMyModelCommand(msg);
+      return;
+    }
+
+    if (cmd0 === '/credits') {
+      await handleCreditsCommand(msg);
       return;
     }
 
