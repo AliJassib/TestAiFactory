@@ -50,6 +50,7 @@ bot.on('message', async (msg) => {
   if (!text || userId == null) return;
 
   let typingInterval;
+  let streamEditInterval = null;
   let placeholderMessageId = null;
   let session = null;
   let assistantSaved = false;
@@ -78,7 +79,6 @@ bot.on('message', async (msg) => {
 
     let fullText = '';
     let finishReason = null;
-    let lastEditAt = 0;
     let lastShown = '';
 
     const applyEdits = async () => {
@@ -93,6 +93,15 @@ bot.on('message', async (msg) => {
         }
       }
       lastShown = fullText;
+    };
+
+    /** تحديثات تيليغرام منفصلة عن قراءة الـ stream — لا نوقف استلام الشبكة. */
+    const startEditPump = () => {
+      if (streamEditInterval != null) return;
+      applyEdits().catch(() => {});
+      streamEditInterval = setInterval(() => {
+        applyEdits().catch(() => {});
+      }, THROTTLE_MS);
     };
 
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -127,29 +136,6 @@ bot.on('message', async (msg) => {
 
     const decoder = new TextDecoder();
     let sseBuffer = '';
-    let pendingEdit = null;
-
-    const scheduleEdit = () => {
-      const now = Date.now();
-      const elapsed = now - lastEditAt;
-      if (elapsed >= THROTTLE_MS) {
-        lastEditAt = now;
-        return applyEdits();
-      }
-      if (pendingEdit) return pendingEdit;
-      pendingEdit = new Promise((resolve) => {
-        setTimeout(async () => {
-          pendingEdit = null;
-          lastEditAt = Date.now();
-          try {
-            await applyEdits();
-          } finally {
-            resolve();
-          }
-        }, THROTTLE_MS - elapsed);
-      });
-      return pendingEdit;
-    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -172,7 +158,7 @@ bot.on('message', async (msg) => {
               clearInterval(typingInterval);
               typingInterval = undefined;
             }
-            await scheduleEdit();
+            startEditPump();
           }
           const fr = json.choices?.[0]?.finish_reason;
           if (fr) finishReason = fr;
@@ -182,6 +168,10 @@ bot.on('message', async (msg) => {
       }
     }
 
+    if (streamEditInterval != null) {
+      clearInterval(streamEditInterval);
+      streamEditInterval = null;
+    }
     await applyEdits();
 
     if (!fullText.trim()) {
@@ -238,5 +228,9 @@ bot.on('message', async (msg) => {
   } finally {
     clearTimeout(timeoutId);
     if (typingInterval) clearInterval(typingInterval);
+    if (streamEditInterval != null) {
+      clearInterval(streamEditInterval);
+      streamEditInterval = null;
+    }
   }
 });
