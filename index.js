@@ -21,15 +21,117 @@ const MESSAGE_FIRST_CHUNK_CHARS =
 
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 120000;
 
+/** أزرار لكل صفحة في قائمة الموديلات */
+const MODELS_PAGE_SIZE = 8;
+const MODELS_CACHE_TTL_MS = 30 * 60 * 1000;
+/** طول نص زر تيليغرام (حد أقصى 64 حرفاً) */
+const BUTTON_LABEL_MAX = 40;
+
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 /** @type {Map<number, { messages: Array<{ role: 'user' | 'assistant'; content: string }> }>} */
 const sessions = new Map();
 
+/** @type {Map<number, string>} معرف المستخدم → معرف الموديل في OpenRouter */
+const userSelectedModel = new Map();
+
+let modelsListCache = { entries: [], fetchedAt: 0 };
+
 function trimSessionMessages(messages) {
   const maxTurns = MAX_HISTORY_PAIRS * 2;
   if (messages.length <= maxTurns) return messages;
   return messages.slice(-maxTurns);
+}
+
+function getModelForUser(userId) {
+  return userSelectedModel.get(userId) ?? OPENROUTER_MODEL;
+}
+
+function truncateLabel(s, max = BUTTON_LABEL_MAX) {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
+}
+
+async function fetchModelsEntries() {
+  const res = await fetch(
+    'https://openrouter.ai/api/v1/models?output_modalities=text',
+    {
+      headers: { Authorization: `Bearer ${process.env.AI_API_KEY}` }
+    }
+  );
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error('فشل قراءة قائمة الموديلات');
+  }
+  if (!res.ok) {
+    throw new Error(
+      data?.error?.message || data?.message || `HTTP ${res.status}`
+    );
+  }
+  const arr = Array.isArray(data.data) ? data.data : [];
+  const entries = arr
+    .filter((m) => {
+      const out = m.architecture?.output_modalities;
+      return Array.isArray(out) && out.includes('text');
+    })
+    .map((m) => ({ id: m.id, name: m.name || m.id }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  modelsListCache = { entries, fetchedAt: Date.now() };
+  return entries;
+}
+
+async function getModelsEntriesCached() {
+  if (
+    Date.now() - modelsListCache.fetchedAt < MODELS_CACHE_TTL_MS &&
+    modelsListCache.entries.length
+  ) {
+    return modelsListCache.entries;
+  }
+  return fetchModelsEntries();
+}
+
+async function buildModelsPage(userId, page) {
+  const entries = await getModelsEntriesCached();
+  if (!entries.length) {
+    return { text: 'ماكو موديلات نصية متاحة.', keyboard: [] };
+  }
+  const totalPages = Math.max(1, Math.ceil(entries.length / MODELS_PAGE_SIZE));
+  const p = Math.max(0, Math.min(page, totalPages - 1));
+  const start = p * MODELS_PAGE_SIZE;
+  const slice = entries.slice(start, start + MODELS_PAGE_SIZE);
+  const current = getModelForUser(userId);
+
+  const text =
+    `📋 الموديلات (صفحة ${p + 1}/${totalPages})\n` +
+    `المختار حالياً:\n${current}\n\n` +
+    `اضغط زرًا لاختيار موديل:`;
+
+  const keyboard = [];
+  for (let i = 0; i < slice.length; i += 2) {
+    const row = [
+      {
+        text: truncateLabel(slice[i].name),
+        callback_data: `m:${start + i}`
+      }
+    ];
+    if (slice[i + 1]) {
+      row.push({
+        text: truncateLabel(slice[i + 1].name),
+        callback_data: `m:${start + i + 1}`
+      });
+    }
+    keyboard.push(row);
+  }
+  const nav = [];
+  if (p > 0) nav.push({ text: '« السابق', callback_data: `p:${p - 1}` });
+  if (p < totalPages - 1)
+    nav.push({ text: 'التالي »', callback_data: `p:${p + 1}` });
+  if (nav.length) keyboard.push(nav);
+
+  return { text, keyboard };
 }
 
 async function safeEditMessageText(chatId, messageId, text) {
@@ -63,11 +165,105 @@ async function sendReplyInSmartChunks(chatId, text) {
   }
 }
 
+bot.on('callback_query', async (q) => {
+  const userId = q.from?.id;
+  const data = q.data;
+  if (!data || userId == null) return;
+  const chatId = q.message?.chat?.id;
+  const messageId = q.message?.message_id;
+  if (chatId == null || messageId == null) return;
+
+  try {
+    if (data.startsWith('p:')) {
+      const page = parseInt(data.slice(2), 10);
+      if (Number.isNaN(page)) return;
+      const built = await buildModelsPage(userId, page);
+      if (!built) return;
+      try {
+        await bot.editMessageText(built.text, {
+          chat_id: chatId,
+          message_id: messageId,
+          ...(built.keyboard.length
+            ? { reply_markup: { inline_keyboard: built.keyboard } }
+            : {})
+        });
+      } finally {
+        await bot.answerCallbackQuery(q.id).catch(() => {});
+      }
+      return;
+    }
+
+    if (data.startsWith('m:')) {
+      const idx = parseInt(data.slice(2), 10);
+      if (Number.isNaN(idx)) return;
+      const entries = await getModelsEntriesCached();
+      const picked = entries[idx];
+      if (!picked) {
+        await bot.answerCallbackQuery(q.id, {
+          text: 'انتهت صلاحية القائمة. أرسل /models',
+          show_alert: true
+        });
+        return;
+      }
+      userSelectedModel.set(userId, picked.id);
+      await bot.answerCallbackQuery(q.id, { text: 'تم' });
+      await bot.sendMessage(
+        chatId,
+        `✅ تم اختيار الموديل:\n${picked.name}\n\n${picked.id}`
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    await bot.answerCallbackQuery(q.id, {
+      text: 'صار خطأ',
+      show_alert: true
+    }).catch(() => {});
+  }
+});
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
   const userId = msg.from?.id;
   if (!text || userId == null) return;
+
+  const parts = text.trim().split(/\s+/);
+  const cmd0 = parts[0].includes('@')
+    ? parts[0].split('@')[0]
+    : parts[0];
+
+  if (cmd0 === '/models') {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      let page = 0;
+      if (parts[1]) {
+        const pi = parseInt(parts[1], 10);
+        if (!Number.isNaN(pi) && pi >= 1) page = pi - 1;
+      }
+      const built = await buildModelsPage(userId, page);
+      if (!built) return;
+      await bot.sendMessage(chatId, built.text, {
+        ...(built.keyboard.length
+          ? { reply_markup: { inline_keyboard: built.keyboard } }
+          : {})
+      });
+    } catch (e) {
+      console.error(e);
+      await bot.sendMessage(
+        chatId,
+        `ما قدرت أجيب قائمة الموديلات.\n${e.message || e}`
+      );
+    }
+    return;
+  }
+
+  if (cmd0 === '/mymodel') {
+    await bot.sendMessage(
+      chatId,
+      `الموديل الحالي:\n${getModelForUser(userId)}`
+    );
+    return;
+  }
 
   let typingInterval;
   let session = null;
@@ -90,6 +286,8 @@ bot.on('message', async (msg) => {
       bot.sendChatAction(chatId, 'typing').catch(() => {});
     }, 4000);
 
+    const model = getModelForUser(userId);
+
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -98,7 +296,7 @@ bot.on('message', async (msg) => {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
+        model,
         messages: apiMessages,
         max_completion_tokens: MAX_COMPLETION_TOKENS,
         user: `telegram-${userId}`,
@@ -160,10 +358,9 @@ bot.on('message', async (msg) => {
         : 'صار خطأ 😅';
     console.error(e.response?.data || e.message || e);
     try {
-      await bot.sendMessage(chatId, errMsg + '\n\n' + e.message);
+      await bot.sendMessage(chatId, errMsg);
     } catch {
       /* ignore */
-      await bot.sendMessage(chatId, e.message);
     }
   } finally {
     clearTimeout(timeoutId);
