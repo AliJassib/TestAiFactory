@@ -12,7 +12,7 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
   let typingInterval;
-  const MAX_CHARS = 4000;
+  const MAX_TELEGRAM_CHARS = 4000;
   function splitIntoChunks(text, maxChars) {
     const chunks = [];
     for (let i = 0; i < text.length; i += maxChars) {
