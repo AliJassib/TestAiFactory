@@ -12,6 +12,14 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
   let typingInterval;
+  const MAX_CHARS = 4000;
+  function splitIntoChunks(text, maxChars) {
+    const chunks = [];
+    for (let i = 0; i < text.length; i += maxChars) {
+      chunks.push(text.slice(i, i + maxChars));
+    }
+    return chunks.length ? chunks : [''];
+  }
   try {
     await bot.sendChatAction(chatId, 'typing');
     typingInterval = setInterval(() => {
@@ -33,7 +41,10 @@ bot.on('message', async (msg) => {
 
     const reply = res.data.choices[0].message.content;
 
-    await bot.sendMessage(chatId, reply);
+    const chunks = splitIntoChunks(reply, MAX_TELEGRAM_CHARS);
+    for (const chunk of chunks) {
+      await bot.sendMessage(chatId, chunk);
+    }
 
   } catch (e) {
     console.log(e.response?.data || e.message);
