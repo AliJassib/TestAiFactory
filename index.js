@@ -11,10 +11,12 @@ bot.on('message', async (msg) => {
   const text = msg.text;
 
   if (!text) return;
-
+  let typingInterval;
   try {
     await bot.sendChatAction(chatId, 'typing');
-
+    typingInterval = setInterval(() => {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+      }, 4000);
     const res = await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
@@ -36,5 +38,7 @@ bot.on('message', async (msg) => {
   } catch (e) {
     console.log(e.response?.data || e.message);
     bot.sendMessage(chatId, 'صار خطأ 😅');
+  }finally {
+    if (typingInterval) clearInterval(typingInterval);
   }
 });
